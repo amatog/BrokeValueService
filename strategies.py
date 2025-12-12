@@ -70,7 +70,7 @@ def greenblatt_magic_formula(f: Dict) -> Dict:
     }
 
 
-def combined_value_score(g: Dict, b: Dict, gr: Dict, f: Dict) -> Dict:
+def combined_value_score(g: Dict, b: Dict, gr: Dict, m: Dict, l: Dict, s: Dict, d: Dict, t: Dict, k: Dict,  f: Dict) -> Dict:
     mos = g.get("margin_of_safety", 0.0)
     mos = max(min(mos, 1.0), -1.0)
 

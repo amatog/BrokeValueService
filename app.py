@@ -172,7 +172,7 @@ def value_score():
     d = davis_growth_quality(fundamentals)
     t = templeton_contrarian_value(fundamentals)
     k = klarman_margin_of_safety(fundamentals)
-    score = combined_value_score(g, b, gr, fundamentals)
+    score = combined_value_score(g, b, gr, m, l, s, d, t, k, fundamentals)
 
     return jsonify(
         symbol=symbol,
@@ -183,7 +183,7 @@ def value_score():
         munger=m,
         lynch=l,
         schloss=s,
-        davis=s,
+        davis=d,
         templeton=t,
         klarman=k,
         score=score,
