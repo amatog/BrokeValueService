@@ -41,6 +41,32 @@ def _require_symbol():
     return symbol.upper(), None, None
 
 
+@app.route("/debug/keys", methods=["GET"])
+def debug_strategy_keys():
+    symbol, error_response, status = _require_symbol()
+    if error_response:
+        return error_response, status
+
+    fundamentals = data_layer.get_basic_fundamentals(symbol)
+
+    strategies = {
+        "graham": graham_valuation(fundamentals),
+        "buffett": buffett_quality(fundamentals),
+        "greenblatt": greenblatt_magic_formula(fundamentals),
+        "munger": munger_quality(fundamentals),
+        "lynch": lynch_growth_value(fundamentals),
+        "schloss": schloss_deep_value(fundamentals),
+        "davis": davis_growth_quality(fundamentals),
+        "templeton": templeton_contrarian_value(fundamentals),
+        "klarman": klarman_margin_of_safety(fundamentals),
+    }
+
+    return jsonify({
+        name: sorted(list(result.keys()))
+        for name, result in strategies.items()
+    })
+
+
 @app.route("/debug/env", methods=["GET"])
 def debug_env():
     alpha_keys = [k for k in os.environ.keys() if "ALPHA" in k]

@@ -10,13 +10,17 @@ def graham_valuation(f: Dict) -> Dict:
     if intrinsic_value != 0:
         mos = (intrinsic_value - price) / intrinsic_value
 
+    mos_score = max(min((mos + 1) / 2, 1.0), 0.0)
+
     return {
+        "strategy": "graham",
         "method": "Graham (vereinfacht)",
         "price": price,
         "eps": eps,
         "intrinsic_value": intrinsic_value,
         "margin_of_safety": mos,
         "is_undervalued": mos > 0.3,
+        "score": mos_score,
     }
 
 
@@ -38,12 +42,14 @@ def buffett_quality(f: Dict) -> Dict:
     quality_score = (roe_score + debt_score + growth_score) / 3
 
     return {
+        "strategy": "buffett",
         "method": "Buffett-Qualität (vereinfacht)",
         "roe": roe,
         "debt_to_equity": debt_to_equity,
         "earnings_growth_5y": growth,
         "quality_score": quality_score,
         "is_high_quality": quality_score >= 0.7,
+        "score": quality_score,
     }
 
 
@@ -63,27 +69,24 @@ def greenblatt_magic_formula(f: Dict) -> Dict:
     magic_score = (ey_score + roc_score) / 2
 
     return {
+        "strategy": "greenblatt",
         "method": "Greenblatt Magic Formula (vereinfacht)",
         "earnings_yield": earnings_yield,
         "return_on_capital": return_on_capital,
         "magic_score": magic_score,
+        "score": magic_score,
     }
 
 
 def combined_value_score(g: Dict, b: Dict, gr: Dict, m: Dict, l: Dict, s: Dict, d: Dict, t: Dict, k: Dict,  f: Dict) -> Dict:
-    mos = g.get("margin_of_safety", 0.0)
-    mos = max(min(mos, 1.0), -1.0)
+    strategies = [g, b, gr, m, l, s, d, t, k]
+    strategy_scores = [s.get("score", 0.0) for s in strategies]
+    avg_strategy_score = sum(strategy_scores) / len(strategy_scores)
 
-    quality = b.get("quality_score", 0.0)
-    magic = gr.get("magic_score", 0.0)
     dividend = f.get("dividend_yield") or 0.0
+    dividend_score = min(max(dividend, 0.0) / 0.05, 1.0)  # 5 % Dividende = voller Score
 
-    score = (
-            0.4 * (mos + 1) / 2 +
-            0.3 * quality +
-            0.2 * magic +
-            0.1 * min(dividend / 0.05, 1.0)  # 5 % Dividende = voller Score
-    )
+    score = 0.85 * avg_strategy_score + 0.15 * dividend_score
 
     if score >= 0.8:
         level = "Sehr attraktiv"
@@ -126,12 +129,14 @@ def munger_quality(f: Dict) -> Dict:
     quality_score = (0.5 * roe_score + 0.3 * growth_score + 0.2 * debt_score)
 
     return {
+        "strategy": "munger",
         "method": "Munger-Qualität (vereinfacht)",
         "roe": roe,
         "debt_to_equity": debt_to_equity,
         "earnings_growth_5y": growth,
         "quality_score": quality_score,
         "is_high_quality": quality_score >= 0.7,
+        "score": quality_score,
     }
 
 
@@ -192,6 +197,7 @@ def lynch_growth_value(f: Dict) -> Dict:
     lynch_score = 0.5 * peg_score + 0.3 * growth_score + 0.2 * debt_score
 
     return {
+        "strategy": "lynch",
         "method": "Lynch – Growth at a Reasonable Price (vereinfacht)",
         "price": price,
         "eps": eps,
@@ -240,6 +246,7 @@ def schloss_deep_value(f: Dict) -> Dict:
     schloss_score = 0.7 * pb_score + 0.3 * debt_score
 
     return {
+        "strategy": "schloss",
         "method": "Schloss – Deep Value (vereinfacht)",
         "price": price,
         "book_value": book_value,
@@ -308,6 +315,7 @@ def davis_growth_quality(f: Dict) -> Dict:
     )
 
     return {
+        "strategy": "davis",
         "method": "Davis – Wachstum & Qualität (vereinfacht)",
         "price": price,
         "eps": eps,
@@ -374,6 +382,7 @@ def templeton_contrarian_value(f: Dict) -> Dict:
     templeton_score = 0.5 * pe_score + 0.3 * pb_score + 0.2 * debt_score
 
     return {
+        "strategy": "templeton",
         "method": "Templeton – Contrarian Value (vereinfacht)",
         "price": price,
         "eps": eps,
@@ -427,6 +436,7 @@ def klarman_margin_of_safety(f: Dict) -> Dict:
     klarman_score = 0.7 * mos_score + 0.3 * debt_score
 
     return {
+        "strategy": "klarman",
         "method": "Klarman – Margin of Safety (vereinfacht)",
         "price": price,
         "eps": eps,
