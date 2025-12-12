@@ -14,6 +14,10 @@ from strategies import (
     davis_growth_quality,
     templeton_contrarian_value,
     klarman_margin_of_safety,
+    piotroski_f_score,
+    beneish_penalty,
+    montier_penalty,
+    finalize_assessment,
 )
 
 app = Flask(__name__)
@@ -198,11 +202,29 @@ def value_score():
     d = davis_growth_quality(fundamentals)
     t = templeton_contrarian_value(fundamentals)
     k = klarman_margin_of_safety(fundamentals)
-    score = combined_value_score(g, b, gr, m, l, s, d, t, k, fundamentals)
+
+    value = combined_value_score(g, b, gr, m, l, s, d, t, k, fundamentals)
+
+    # Quality & Forensics (Profil A: beneish/montier optional, aber stabil)
+    fin_cur, fin_prev = data_layer.get_financials_yoy(symbol)
+    piot = piotroski_f_score(fin_cur, fin_prev)
+
+    # Falls du M/C noch nicht berechnest: None => available=false, penalty=0
+    bene = beneish_penalty(m_score=None)
+    mont = montier_penalty(c_score=None, red_flags=[])
+
+    final = finalize_assessment(
+        value_score_01=value.get("value_score", 0.0),
+        piotroski=piot,
+        beneish=bene,
+        montier=mont,
+    )
 
     return jsonify(
         symbol=symbol,
         fundamentals=fundamentals,
+
+        # einzelne Strategien (wie bisher)
         graham=g,
         buffett=b,
         greenblatt=gr,
@@ -212,8 +234,17 @@ def value_score():
         davis=d,
         templeton=t,
         klarman=k,
-        score=score,
+
+        # UI braucht nur diese 3 Blöcke und hat nie Sonderfälle
+        value=value,
+        quality_forensics={
+            "piotroski": piot,
+            "beneish": bene,
+            "montier": mont,
+        },
+        final_assessment=final,
     )
+
 
 
 

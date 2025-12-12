@@ -78,29 +78,66 @@ def greenblatt_magic_formula(f: Dict) -> Dict:
     }
 
 
-def combined_value_score(g: Dict, b: Dict, gr: Dict, m: Dict, l: Dict, s: Dict, d: Dict, t: Dict, k: Dict,  f: Dict) -> Dict:
-    strategies = [g, b, gr, m, l, s, d, t, k]
-    strategy_scores = [s.get("score", 0.0) for s in strategies]
-    avg_strategy_score = sum(strategy_scores) / len(strategy_scores)
+def combined_value_score(
+        g: Dict, b: Dict, gr: Dict, m: Dict, l: Dict, s: Dict, d: Dict, t: Dict, k: Dict, f: Dict
+) -> Dict:
+    def clamp01(x):
+        try:
+            x = float(x)
+        except Exception:
+            return 0.0
+        return max(0.0, min(1.0, x))
 
-    dividend = f.get("dividend_yield") or 0.0
-    dividend_score = min(max(dividend, 0.0) / 0.05, 1.0)  # 5 % Dividende = voller Score
+    # Einheitliche Inputs (0..1)
+    components = {
+        "graham": clamp01(g.get("score")),
+        "buffett": clamp01(b.get("score")),
+        "greenblatt": clamp01(gr.get("score")),
+        "munger": clamp01(m.get("score")),
+        "lynch": clamp01(l.get("score")),
+        "schloss": clamp01(s.get("score")),
+        "davis": clamp01(d.get("score")),
+        "templeton": clamp01(t.get("score")),
+        "klarman": clamp01(k.get("score")),
+        "dividend": clamp01((max(float(f.get("dividend_yield") or 0.0), 0.0)) / 0.05)),  # 5% = voller Score
+    }
 
-    score = 0.85 * avg_strategy_score + 0.15 * dividend_score
+    # Gewichte (Summe = 1.0) – bewusst ausgewogen, ohne Sonderlogik
+    weights = {
+    "graham": 0.12,
+    "klarman": 0.10,
+    "greenblatt": 0.14,
+    "buffett": 0.10,
+    "munger": 0.10,
+    "lynch": 0.10,
+    "schloss": 0.10,
+    "davis": 0.10,
+    "templeton": 0.07,
+    "dividend": 0.07,
+    }
 
-    if score >= 0.8:
+    score = 0.0
+    for name, w in weights.items():
+        score += w * components.get(name, 0.0)
+    score = clamp01(score)
+
+    if score >= 0.80:
         level = "Sehr attraktiv"
-    elif score >= 0.6:
+    elif score >= 0.65:
         level = "Attraktiv"
-    elif score >= 0.4:
+    elif score >= 0.50:
         level = "Neutral"
     else:
         level = "Unattraktiv"
 
     return {
-        "value_score": score,
+        "value_score": round(score, 4),              # 0..1 (stabil für Backend)
+        "value_score_100": round(score * 100, 1),    # 0..100 (bequem für UI)
         "value_level": level,
+        "components": {k: round(v, 4) for k, v in components.items()},
+        "weights": weights,
     }
+
 
 
 # ---------------------------------------------------
@@ -445,3 +482,176 @@ def klarman_margin_of_safety(f: Dict) -> Dict:
         "debt_to_equity": debt_to_equity,
         "score": klarman_score,
     }
+
+from typing import Optional, List, Any
+
+def piotroski_f_score(cur: Dict, prev: Dict) -> Dict:
+    # Wenn Daten fehlen: stabiler Output, UI ohne Sonderfälle
+    required = [
+        "net_income", "total_assets", "operating_cash_flow",
+        "long_term_debt", "current_assets", "current_liabilities",
+        "shares_outstanding", "gross_profit", "revenue",
+    ]
+    available = all(cur.get(k) is not None and prev.get(k) is not None for k in required)
+
+    def safe_div(a, b):
+        if a is None or b in (None, 0):
+            return None
+        return float(a) / float(b)
+
+    if not available:
+        return {
+            "available": False,
+            "f_score": None,
+            "quality_score": 0.0,
+            "passes_gate": True,   # wichtig: kein Fake-REJECT wenn Daten fehlen
+            "bucket": "UNKNOWN",
+            "signals": {},
+            "missing": [k for k in required if cur.get(k) is None or prev.get(k) is None],
+        }
+
+    roa_cur = safe_div(cur["net_income"], cur["total_assets"])
+    roa_prev = safe_div(prev["net_income"], prev["total_assets"])
+
+    leverage_cur = safe_div(cur["long_term_debt"], cur["total_assets"])
+    leverage_prev = safe_div(prev["long_term_debt"], prev["total_assets"])
+
+    cr_cur = safe_div(cur["current_assets"], cur["current_liabilities"])
+    cr_prev = safe_div(prev["current_assets"], prev["current_liabilities"])
+
+    gm_cur = safe_div(cur["gross_profit"], cur["revenue"])
+    gm_prev = safe_div(prev["gross_profit"], prev["revenue"])
+
+    at_cur = safe_div(cur["revenue"], cur["total_assets"])
+    at_prev = safe_div(prev["revenue"], prev["total_assets"])
+
+    signals = {
+        # Profitability
+        "roa_pos": 1 if (roa_cur is not None and roa_cur > 0) else 0,
+        "cfo_pos": 1 if (cur["operating_cash_flow"] > 0) else 0,
+        "delta_roa_pos": 1 if (roa_cur is not None and roa_prev is not None and roa_cur > roa_prev) else 0,
+        "accruals_cfo_gt_ni": 1 if (cur["operating_cash_flow"] > cur["net_income"]) else 0,
+        # Leverage/Liquidity
+        "delta_leverage_neg": 1 if (leverage_cur is not None and leverage_prev is not None and leverage_cur < leverage_prev) else 0,
+        "delta_current_ratio_pos": 1 if (cr_cur is not None and cr_prev is not None and cr_cur > cr_prev) else 0,
+        "no_dilution": 1 if (cur["shares_outstanding"] <= prev["shares_outstanding"]) else 0,
+        # Operating efficiency
+        "delta_gross_margin_pos": 1 if (gm_cur is not None and gm_prev is not None and gm_cur > gm_prev) else 0,
+        "delta_asset_turnover_pos": 1 if (at_cur is not None and at_prev is not None and at_cur > at_prev) else 0,
+    }
+
+    f_score = int(sum(signals.values()))
+    quality_score = round((f_score / 9.0) * 100.0, 2)
+
+    rejected = f_score <= 3
+    if rejected:
+        bucket = "REJECT"
+    elif f_score >= 7:
+        bucket = "PASS"
+    else:
+        bucket = "WEAK_MEDIUM"
+
+    return {
+        "available": True,
+        "f_score": f_score,
+        "quality_score": quality_score,
+        "passes_gate": not rejected,
+        "bucket": bucket,
+        "signals": signals,
+        "missing": [],
+    }
+
+
+def beneish_penalty(m_score: Optional[float]) -> Dict:
+    # Profil A: NIE reject – nur Warnung + Penalty
+    if m_score is None:
+        return {"available": False, "m_score": None, "warning": False, "severity": "NONE", "penalty": 0}
+
+    if m_score <= -1.78:
+        return {"available": True, "m_score": m_score, "warning": False, "severity": "NONE", "penalty": 0}
+    if m_score <= -1.50:
+        return {"available": True, "m_score": m_score, "warning": True, "severity": "MEDIUM", "penalty": 10}
+    if m_score <= -1.00:
+        return {"available": True, "m_score": m_score, "warning": True, "severity": "HIGH", "penalty": 15}
+    return {"available": True, "m_score": m_score, "warning": True, "severity": "HIGH", "penalty": 20}
+
+
+def montier_penalty(c_score: Optional[int], red_flags: Optional[List[str]] = None) -> Dict:
+    red_flags = red_flags or []
+    if c_score is None:
+        return {"available": False, "c_score": None, "warning": False, "severity": "NONE", "penalty": 0, "red_flags": red_flags}
+
+    c_score = int(c_score)
+    if c_score <= 1:
+        return {"available": True, "c_score": c_score, "warning": False, "severity": "NONE", "penalty": 0, "red_flags": red_flags}
+    if c_score == 2:
+        return {"available": True, "c_score": c_score, "warning": True, "severity": "MEDIUM", "penalty": 5, "red_flags": red_flags}
+    return {"available": True, "c_score": c_score, "warning": True, "severity": "HIGH", "penalty": 10, "red_flags": red_flags}
+
+
+def finalize_assessment(value_score_01: float, piotroski: Dict, beneish: Dict, montier: Dict) -> Dict:
+    """
+    Profil A, 70/30:
+      - Gate: Piotroski F <= 3 => REJECT (nur wenn piotroski available)
+      - FinalScore = 0.70*Value(0..100) + 0.30*Quality(0..100) - Penalty(0..30)
+    """
+    # stabile Defaults
+    value100 = max(0.0, min(100.0, float(value_score_01) * 100.0))
+
+    # Gate nur anwenden, wenn Piotroski verfügbar ist
+    rejected = False
+    rejection_reason = None
+    if piotroski.get("available") and not piotroski.get("passes_gate", True):
+        rejected = True
+        rejection_reason = "Piotroski F-Score <= 3 (Value Trap Risk)"
+
+    quality100 = float(piotroski.get("quality_score") or 0.0)  # 0..100
+    penalty = int((beneish.get("penalty") or 0) + (montier.get("penalty") or 0))
+
+    if rejected:
+        final100 = 0.0
+        decision = "REJECT"
+    else:
+        final100 = (0.70 * value100) + (0.30 * quality100) - float(penalty)
+        final100 = max(0.0, min(100.0, final100))
+
+        if final100 >= 80:
+            decision = "BUY"
+        elif final100 >= 65:
+            decision = "WATCHLIST"
+        elif final100 >= 50:
+            decision = "HOLD"
+        else:
+            decision = "AVOID"
+
+    # UI Badges ohne Sonderfälle
+    badges = []
+
+    # Quality badge
+    if not piotroski.get("available"):
+        badges.append({"type": "QUALITY", "label": "Quality Check unavailable", "severity": "INFO"})
+    else:
+        f = piotroski.get("f_score")
+        if rejected:
+            badges.append({"type": "QUALITY", "label": "Rejected: Value Trap Risk", "severity": "HIGH"})
+        elif f is not None and f >= 7:
+            badges.append({"type": "QUALITY", "label": "Quality Pass", "severity": "INFO"})
+        else:
+            badges.append({"type": "QUALITY", "label": "Quality Weak/Medium", "severity": "MEDIUM"})
+
+    if beneish.get("warning"):
+        badges.append({"type": "ACCOUNTING", "label": "Accounting Risk", "severity": beneish.get("severity", "MEDIUM")})
+    if montier.get("warning"):
+        badges.append({"type": "FORENSICS", "label": "Cooking Risk", "severity": montier.get("severity", "MEDIUM")})
+
+    return {
+        "decision": decision,
+        "final_score_100": round(final100, 1),
+        "rejected": rejected,
+        "rejection_reason": rejection_reason,
+        "penalty_total": penalty,
+        "weights": {"value": 0.7, "quality": 0.3},
+        "formula": "final=0.70*value(0..100) + 0.30*quality(0..100) - penalty(0..30)",
+        "badges": badges,
+    }
+

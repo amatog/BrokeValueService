@@ -182,3 +182,95 @@ class DataLayer:
         if "Note" in data or "Information" in data:
             logger.warning("[DataLayer] AlphaVantage Hinweis/Limit: %s", data)
         return data
+    def get_financials_yoy(self, symbol: str):
+        """
+        Returns: (cur, prev) dicts for Piotroski.
+        Keys:
+          net_income, total_assets, operating_cash_flow, long_term_debt,
+          current_assets, current_liabilities, shares_outstanding,
+          gross_profit, revenue
+        """
+        symbol = symbol.upper()
+
+        if self.use_dummy:
+            cur = {
+                "net_income": 5_000_000,
+                "total_assets": 50_000_000,
+                "operating_cash_flow": 6_000_000,
+                "long_term_debt": 10_000_000,
+                "current_assets": 12_000_000,
+                "current_liabilities": 6_000_000,
+                "shares_outstanding": 1_000_000,
+                "gross_profit": 20_000_000,
+                "revenue": 40_000_000,
+            }
+            prev = {
+                "net_income": 4_000_000,
+                "total_assets": 48_000_000,
+                "operating_cash_flow": 4_500_000,
+                "long_term_debt": 11_000_000,
+                "current_assets": 10_000_000,
+                "current_liabilities": 6_500_000,
+                "shares_outstanding": 1_000_000,
+                "gross_profit": 18_000_000,
+                "revenue": 38_000_000,
+            }
+            return cur, prev
+
+        # AlphaVantage fetches
+        overview = self._get({"function": "OVERVIEW", "symbol": symbol})
+        balance = self._get({"function": "BALANCE_SHEET", "symbol": symbol})
+        income = self._get({"function": "INCOME_STATEMENT", "symbol": symbol})
+        cashflow = self._get({"function": "CASH_FLOW", "symbol": symbol})
+
+        def to_float(x):
+            try:
+                if x is None:
+                    return None
+                s = str(x).strip()
+                if not s or s.lower() == "none":
+                    return None
+                return float(s)
+            except Exception:
+                return None
+
+        # Grab annual reports: [0]=latest, [1]=prior
+        b = balance.get("annualReports") or []
+        i = income.get("annualReports") or []
+        c = cashflow.get("annualReports") or []
+
+        # shares outstanding from overview (best available in AV)
+        shares = to_float(overview.get("SharesOutstanding"))
+
+        def pick(report_list, idx):
+            return report_list[idx] if len(report_list) > idx else {}
+
+        b0, b1 = pick(b, 0), pick(b, 1)
+        i0, i1 = pick(i, 0), pick(i, 1)
+        c0, c1 = pick(c, 0), pick(c, 1)
+
+        cur = {
+            "net_income": to_float(i0.get("netIncome")),
+            "total_assets": to_float(b0.get("totalAssets")),
+            "operating_cash_flow": to_float(c0.get("operatingCashflow")),
+            "long_term_debt": to_float(b0.get("longTermDebt")),
+            "current_assets": to_float(b0.get("totalCurrentAssets")),
+            "current_liabilities": to_float(b0.get("totalCurrentLiabilities")),
+            "shares_outstanding": shares,  # same for both years unless you have year-specific series
+            "gross_profit": to_float(i0.get("grossProfit")),
+            "revenue": to_float(i0.get("totalRevenue")),
+        }
+
+        prev = {
+            "net_income": to_float(i1.get("netIncome")),
+            "total_assets": to_float(b1.get("totalAssets")),
+            "operating_cash_flow": to_float(c1.get("operatingCashflow")),
+            "long_term_debt": to_float(b1.get("longTermDebt")),
+            "current_assets": to_float(b1.get("totalCurrentAssets")),
+            "current_liabilities": to_float(b1.get("totalCurrentLiabilities")),
+            "shares_outstanding": shares,
+            "gross_profit": to_float(i1.get("grossProfit")),
+            "revenue": to_float(i1.get("totalRevenue")),
+        }
+
+        return cur, prev
