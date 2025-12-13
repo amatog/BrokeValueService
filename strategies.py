@@ -99,7 +99,7 @@ def combined_value_score(
         "davis": clamp01(d.get("score")),
         "templeton": clamp01(t.get("score")),
         "klarman": clamp01(k.get("score")),
-        "dividend": clamp01((max(float(f.get("dividend_yield") or 0.0), 0.0)) / 0.05)),  # 5% = voller Score
+        "dividend": clamp01(max(float(f.get("dividend_yield") or 0.0), 0.0) / 0.05),  # 5% = voller Score
     }
 
     # Gewichte (Summe = 1.0) – bewusst ausgewogen, ohne Sonderlogik
