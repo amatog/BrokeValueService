@@ -46,6 +46,25 @@ class DataLayer:
             data["source"] = "dummy-fallback"
             return data
 
+    def get_financials_yoy(self, symbol: str) -> Dict:
+        """Liefer t/t-1 Finanzdaten für Piotroski/Beneish/Montier."""
+        symbol = symbol.upper()
+
+        if self.use_dummy:
+            data = self._dummy_financials(symbol)
+            data["source"] = "dummy"
+            return data
+
+        try:
+            data = self._alphavantage_financials(symbol)
+            data["source"] = "alphavantage"
+            return data
+        except Exception as e:
+            logger.exception("[DataLayer] Fehler bei AlphaVantage Finanzdaten, fallback auf Dummy: %s", e)
+            data = self._dummy_financials(symbol)
+            data["source"] = "dummy-fallback"
+            return data
+
     # ---------------------------------------------------
     # Dummy-Daten
     # ---------------------------------------------------
@@ -64,6 +83,58 @@ class DataLayer:
             "debt_to_equity": 0.5,
             "earnings_growth_5y": 0.05,
         }
+
+    def _dummy_financials(self, symbol: str) -> Dict:
+        periods = [
+            {
+                "fiscalDateEnding": "2023-12-31",
+                "balance": {
+                    "totalAssets": 5000.0,
+                    "totalCurrentAssets": 2000.0,
+                    "totalCurrentLiabilities": 900.0,
+                    "longTermDebt": 800.0,
+                    "totalLiabilities": 2500.0,
+                    "commonStockSharesOutstanding": 100.0,
+                    "netReceivables": 400.0,
+                    "inventory": 300.0,
+                },
+                "income": {
+                    "netIncome": 600.0,
+                    "grossProfit": 1500.0,
+                    "totalRevenue": 4000.0,
+                    "sellingGeneralAndAdministrative": 500.0,
+                },
+                "cashflow": {
+                    "operatingCashflow": 650.0,
+                    "depreciation": 120.0,
+                },
+            },
+            {
+                "fiscalDateEnding": "2022-12-31",
+                "balance": {
+                    "totalAssets": 4600.0,
+                    "totalCurrentAssets": 1800.0,
+                    "totalCurrentLiabilities": 950.0,
+                    "longTermDebt": 900.0,
+                    "totalLiabilities": 2400.0,
+                    "commonStockSharesOutstanding": 100.0,
+                    "netReceivables": 380.0,
+                    "inventory": 280.0,
+                },
+                "income": {
+                    "netIncome": 520.0,
+                    "grossProfit": 1400.0,
+                    "totalRevenue": 3600.0,
+                    "sellingGeneralAndAdministrative": 480.0,
+                },
+                "cashflow": {
+                    "operatingCashflow": 540.0,
+                    "depreciation": 110.0,
+                },
+            },
+        ]
+
+        return {"symbol": symbol, "periods": periods}
 
     # ---------------------------------------------------
     # Echte Daten von AlphaVantage
@@ -170,6 +241,62 @@ class DataLayer:
             "debt_to_equity": debt_to_equity,
             "earnings_growth_5y": earnings_growth_5y,
         }
+
+    def _alphavantage_financials(self, symbol: str) -> Dict:
+        symbol = symbol.upper()
+
+        balance = self._get({"function": "BALANCE_SHEET", "symbol": symbol})
+        income = self._get({"function": "INCOME_STATEMENT", "symbol": symbol})
+        cashflow = self._get({"function": "CASH_FLOW", "symbol": symbol})
+
+        def to_float(x):
+            try:
+                if x is None:
+                    return None
+                s = str(x).strip()
+                if not s or s.lower() == "none":
+                    return None
+                return float(s)
+            except ValueError:
+                return None
+
+        balance_reports = balance.get("annualReports") or []
+        income_reports = income.get("annualReports") or []
+        cashflow_reports = cashflow.get("annualReports") or []
+
+        count = min(len(balance_reports), len(income_reports), len(cashflow_reports), 2)
+        periods = []
+        for idx in range(count):
+            bal = balance_reports[idx]
+            inc = income_reports[idx]
+            cf = cashflow_reports[idx]
+            periods.append(
+                {
+                    "fiscalDateEnding": bal.get("fiscalDateEnding") or inc.get("fiscalDateEnding"),
+                    "balance": {
+                        "totalAssets": to_float(bal.get("totalAssets")),
+                        "totalCurrentAssets": to_float(bal.get("totalCurrentAssets")),
+                        "totalCurrentLiabilities": to_float(bal.get("totalCurrentLiabilities")),
+                        "longTermDebt": to_float(bal.get("longTermDebt")),
+                        "totalLiabilities": to_float(bal.get("totalLiabilities")),
+                        "commonStockSharesOutstanding": to_float(bal.get("commonStockSharesOutstanding")),
+                        "netReceivables": to_float(bal.get("totalReceivables")) or to_float(bal.get("netReceivables")),
+                        "inventory": to_float(bal.get("inventory")),
+                    },
+                    "income": {
+                        "netIncome": to_float(inc.get("netIncome")),
+                        "grossProfit": to_float(inc.get("grossProfit")),
+                        "totalRevenue": to_float(inc.get("totalRevenue")),
+                        "sellingGeneralAndAdministrative": to_float(inc.get("sellingGeneralAndAdministrative")),
+                    },
+                    "cashflow": {
+                        "operatingCashflow": to_float(cf.get("operatingCashflow")),
+                        "depreciation": to_float(cf.get("depreciation")),
+                    },
+                }
+            )
+
+        return {"symbol": symbol, "periods": periods}
 
     # ---------------------------------------------------
     # HTTP-Helfer

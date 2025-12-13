@@ -70,33 +70,88 @@ def greenblatt_magic_formula(f: Dict) -> Dict:
     }
 
 
-def combined_value_score(g: Dict, b: Dict, gr: Dict, m: Dict, l: Dict, s: Dict, d: Dict, t: Dict, k: Dict,  f: Dict) -> Dict:
-    mos = g.get("margin_of_safety", 0.0)
-    mos = max(min(mos, 1.0), -1.0)
+def combined_value_score(
+    g: Dict,
+    b: Dict,
+    gr: Dict,
+    m: Dict,
+    l: Dict,
+    s: Dict,
+    d: Dict,
+    t: Dict,
+    k: Dict,
+    f: Dict,
+    financials: Dict | None = None,
+) -> Dict:
+    """
+    Gewichtete Aggregation aller Value-Strategien plus Quality/Forensics.
 
-    quality = b.get("quality_score", 0.0)
-    magic = gr.get("magic_score", 0.0)
-    dividend = f.get("dividend_yield") or 0.0
+    * Liefert stabile Keys: value, quality_forensics, final_assessment.
+    * Breakdown für Debug/UI: jede Komponente mit Gewicht und Beitrag.
+    * Piotroski-Gate nur, wenn genügend Daten vorhanden sind.
+    """
 
-    score = (
-            0.4 * (mos + 1) / 2 +
-            0.3 * quality +
-            0.2 * magic +
-            0.1 * min(dividend / 0.05, 1.0)  # 5 % Dividende = voller Score
-    )
+    def _clamp_01(x: float | None) -> float | None:
+        if x is None:
+            return None
+        return max(0.0, min(1.0, x))
 
-    if score >= 0.8:
-        level = "Sehr attraktiv"
-    elif score >= 0.6:
-        level = "Attraktiv"
-    elif score >= 0.4:
-        level = "Neutral"
+    mos = g.get("margin_of_safety")
+    mos_component = None
+    if mos is not None:
+        mos_component = _clamp_01((mos + 1) / 2)
+
+    dividend = f.get("dividend_yield")
+    dividend_component = None
+    if dividend is not None:
+        dividend_component = _clamp_01(dividend / 0.05)  # 5 % = voller Score
+
+    value_components = {
+        "graham_mos": (0.18, mos_component),
+        "buffett_quality": (0.1, _clamp_01(b.get("quality_score"))),
+        "greenblatt_magic": (0.1, _clamp_01(gr.get("magic_score"))),
+        "munger_quality": (0.08, _clamp_01(m.get("quality_score"))),
+        "lynch_growth": (0.1, _clamp_01(l.get("score"))),
+        "schloss_value": (0.08, _clamp_01(s.get("score"))),
+        "davis_growth_quality": (0.08, _clamp_01(d.get("score"))),
+        "templeton_value": (0.08, _clamp_01(t.get("score"))),
+        "klarman_mos": (0.1, _clamp_01(k.get("score"))),
+        "dividend_yield": (0.1, dividend_component),
+    }
+
+    total_weight = sum(w for w, score in value_components.values() if score is not None)
+    weighted_sum = sum(w * score for w, score in value_components.values() if score is not None)
+    value_score = weighted_sum / total_weight if total_weight else 0.0
+
+    if value_score >= 0.8:
+        value_label = "Sehr attraktiv"
+    elif value_score >= 0.6:
+        value_label = "Attraktiv"
+    elif value_score >= 0.4:
+        value_label = "Neutral"
     else:
-        level = "Unattraktiv"
+        value_label = "Unattraktiv"
+
+    value_block = {
+        "score": value_score,
+        "label": value_label,
+        "breakdown": {
+            key: {
+                "weight": weight,
+                "score": score,
+                "contribution": weight * score if score is not None else None,
+            }
+            for key, (weight, score) in value_components.items()
+        },
+    }
+
+    quality_block = quality_forensics_assessment(financials)
+    final_block = final_assessment(value_block, quality_block)
 
     return {
-        "value_score": score,
-        "value_level": level,
+        "value": value_block,
+        "quality_forensics": quality_block,
+        "final_assessment": final_block,
     }
 
 
@@ -434,4 +489,349 @@ def klarman_margin_of_safety(f: Dict) -> Dict:
         "margin_of_safety": mos,
         "debt_to_equity": debt_to_equity,
         "score": klarman_score,
+    }
+
+
+# ---------------------------------------------------
+# Quality / Forensics & Final Assessment
+# ---------------------------------------------------
+
+
+def _to_float(value):
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_div(numerator, denominator):
+    num = _to_float(numerator)
+    den = _to_float(denominator)
+    if num is None or den in (None, 0):
+        return None
+    return num / den
+
+
+def _piotroski_f_score(financials: Dict) -> Dict:
+    periods = (financials or {}).get("periods", [])
+    if len(periods) < 2:
+        return {
+            "score": None,
+            "available": False,
+            "reason": "insufficient_periods",
+        }
+
+    current = periods[0]
+    previous = periods[1]
+
+    def get_period_metric(period: Dict, section: str, key: str):
+        return _to_float(period.get(section, {}).get(key))
+
+    net_income_t = get_period_metric(current, "income", "netIncome")
+    net_income_t1 = get_period_metric(previous, "income", "netIncome")
+    total_assets_t = get_period_metric(current, "balance", "totalAssets")
+    total_assets_t1 = get_period_metric(previous, "balance", "totalAssets")
+    ocf_t = get_period_metric(current, "cashflow", "operatingCashflow")
+    long_term_debt_t = get_period_metric(current, "balance", "longTermDebt")
+    long_term_debt_t1 = get_period_metric(previous, "balance", "longTermDebt")
+    curr_assets_t = get_period_metric(current, "balance", "totalCurrentAssets")
+    curr_assets_t1 = get_period_metric(previous, "balance", "totalCurrentAssets")
+    curr_liab_t = get_period_metric(current, "balance", "totalCurrentLiabilities")
+    curr_liab_t1 = get_period_metric(previous, "balance", "totalCurrentLiabilities")
+    shares_t = get_period_metric(current, "balance", "commonStockSharesOutstanding")
+    shares_t1 = get_period_metric(previous, "balance", "commonStockSharesOutstanding")
+    gross_profit_t = get_period_metric(current, "income", "grossProfit")
+    gross_profit_t1 = get_period_metric(previous, "income", "grossProfit")
+    revenue_t = get_period_metric(current, "income", "totalRevenue")
+    revenue_t1 = get_period_metric(previous, "income", "totalRevenue")
+
+    roa_t = _safe_div(net_income_t, total_assets_t)
+    roa_t1 = _safe_div(net_income_t1, total_assets_t1)
+    cfo_positive = ocf_t is not None and ocf_t > 0
+    accrual = None if ocf_t is None or net_income_t is None else ocf_t > net_income_t
+
+    leverage_delta = None
+    if long_term_debt_t is not None and long_term_debt_t1 is not None and total_assets_t is not None and total_assets_t1 is not None:
+        leverage_delta = _safe_div(long_term_debt_t, total_assets_t) - _safe_div(long_term_debt_t1, total_assets_t1)
+
+    current_ratio_delta = None
+    if all(x is not None for x in (curr_assets_t, curr_assets_t1, curr_liab_t, curr_liab_t1)):
+        current_ratio_delta = _safe_div(curr_assets_t, curr_liab_t) - _safe_div(curr_assets_t1, curr_liab_t1)
+
+    asset_turnover_t = _safe_div(revenue_t, total_assets_t)
+    asset_turnover_t1 = _safe_div(revenue_t1, total_assets_t1)
+
+    gross_margin_t = _safe_div(gross_profit_t, revenue_t)
+    gross_margin_t1 = _safe_div(gross_profit_t1, revenue_t1)
+
+    indicators = {
+        "roa_positive": roa_t is not None and roa_t > 0,
+        "roa_improving": roa_t is not None and roa_t1 is not None and roa_t > roa_t1,
+        "cfo_positive": cfo_positive,
+        "accruals": accrual,
+        "leverage_decrease": leverage_delta is not None and leverage_delta < 0,
+        "liquidity_improving": current_ratio_delta is not None and current_ratio_delta > 0,
+        "equity_no_dilution": shares_t is not None and shares_t1 is not None and shares_t <= shares_t1,
+        "gross_margin_improving": gross_margin_t is not None and gross_margin_t1 is not None and gross_margin_t > gross_margin_t1,
+        "asset_turnover_improving": asset_turnover_t is not None and asset_turnover_t1 is not None and asset_turnover_t > asset_turnover_t1,
+    }
+
+    available_signals = [val for val in indicators.values() if val is not None]
+    if not available_signals:
+        return {
+            "score": None,
+            "available": False,
+            "reason": "missing_metrics",
+        }
+
+    score = sum(1 for val in available_signals if val)
+    score_normalized = score / len(available_signals)
+
+    return {
+        "score_raw": score,
+        "score": score_normalized,
+        "available": True,
+        "indicators": indicators,
+    }
+
+
+def _beneish_m_score(financials: Dict) -> Dict:
+    periods = (financials or {}).get("periods", [])
+    if len(periods) < 2:
+        return {"score": None, "available": False, "reason": "insufficient_periods"}
+
+    current = periods[0]
+    previous = periods[1]
+
+    def metric(period: Dict, section: str, key: str):
+        return _to_float(period.get(section, {}).get(key))
+
+    revenue_t = metric(current, "income", "totalRevenue")
+    revenue_t1 = metric(previous, "income", "totalRevenue")
+    receivables_t = metric(current, "balance", "netReceivables")
+    receivables_t1 = metric(previous, "balance", "netReceivables")
+    gross_profit_t = metric(current, "income", "grossProfit")
+    gross_profit_t1 = metric(previous, "income", "grossProfit")
+    total_assets_t = metric(current, "balance", "totalAssets")
+    total_assets_t1 = metric(previous, "balance", "totalAssets")
+    depreciation_t = metric(current, "cashflow", "depreciation")
+    depreciation_t1 = metric(previous, "cashflow", "depreciation")
+    sga_t = metric(current, "income", "sellingGeneralAndAdministrative")
+    sga_t1 = metric(previous, "income", "sellingGeneralAndAdministrative")
+    total_liab_t = metric(current, "balance", "totalLiabilities")
+    total_liab_t1 = metric(previous, "balance", "totalLiabilities")
+    cashflow_t = metric(current, "cashflow", "operatingCashflow")
+    net_income_t = metric(current, "income", "netIncome")
+
+    # Berechnungen mit möglichst vielen verfügbaren Kennzahlen
+    dsri = None
+    if receivables_t is not None and revenue_t is not None and receivables_t1 is not None and revenue_t1 is not None and revenue_t1 != 0:
+        dsri = _safe_div(receivables_t / revenue_t, receivables_t1 / revenue_t1)
+
+    gmi = None
+    if all(x not in (None, 0) for x in (gross_profit_t1, revenue_t1, gross_profit_t, revenue_t)):
+        gmi = _safe_div((revenue_t1 - gross_profit_t1) / revenue_t1, (revenue_t - gross_profit_t) / revenue_t)
+
+    aqi = None
+    if all(x is not None for x in (total_assets_t, total_assets_t1, revenue_t, revenue_t1)):
+        aqi = _safe_div((total_assets_t - gross_profit_t) / total_assets_t if total_assets_t else None,
+                        (total_assets_t1 - gross_profit_t1) / total_assets_t1 if total_assets_t1 else None)
+
+    sgi = _safe_div(revenue_t, revenue_t1)
+
+    depi = None
+    if depreciation_t is not None and depreciation_t1 is not None and gross_profit_t is not None and gross_profit_t1 not in (None, 0):
+        depi = _safe_div(depreciation_t1 / gross_profit_t1, depreciation_t / gross_profit_t)
+
+    sgai = None
+    if sga_t is not None and sga_t1 is not None and revenue_t not in (None, 0) and revenue_t1 not in (None, 0):
+        sgai = _safe_div(sga_t / revenue_t, sga_t1 / revenue_t1)
+
+    lvgi = None
+    if all(x not in (None, 0) for x in (total_liab_t, total_liab_t1, total_assets_t, total_assets_t1)):
+        lvgi = _safe_div(total_liab_t / total_assets_t, total_liab_t1 / total_assets_t1)
+
+    tata = None
+    if cashflow_t is not None and total_assets_t not in (None, 0) and net_income_t is not None:
+        tata = (cashflow_t - net_income_t) / total_assets_t
+
+    factors = [dsri, gmi, aqi, sgi, depi, sgai, lvgi, tata]
+    available = [f for f in factors if f is not None]
+    if len(available) < 3:
+        return {"score": None, "available": False, "reason": "missing_metrics"}
+
+    # Vereinfachte Gewichtung orientiert an Beneish (keine perfekten Koeffizienten, aber stabile Bewertung)
+    m_score = (
+        0.92 * (dsri or 0)
+        + 0.528 * (gmi or 0)
+        + 0.404 * (aqi or 0)
+        + 0.892 * (sgi or 0)
+        + 0.115 * (depi or 0)
+        - 0.172 * (sgai or 0)
+        + 4.679 * (tata or 0)
+        - 0.327 * (lvgi or 0)
+    )
+
+    # Mapping zu 0..1: < -2.22 = sehr gut, > -1 = schwach
+    if m_score <= -2.22:
+        normalized = 1.0
+    elif m_score <= -1.78:
+        normalized = 0.7
+    elif m_score <= -1.0:
+        normalized = 0.4
+    else:
+        normalized = 0.1
+
+    return {
+        "score_raw": m_score,
+        "score": normalized,
+        "available": True,
+        "factors": {
+            "dsri": dsri,
+            "gmi": gmi,
+            "aqi": aqi,
+            "sgi": sgi,
+            "depi": depi,
+            "sgai": sgai,
+            "lvgi": lvgi,
+            "tata": tata,
+        },
+    }
+
+
+def _montier_c_score(financials: Dict) -> Dict:
+    periods = (financials or {}).get("periods", [])
+    if len(periods) < 2:
+        return {"score": None, "available": False, "reason": "insufficient_periods"}
+
+    current = periods[0]
+    previous = periods[1]
+
+    def metric(period: Dict, section: str, key: str):
+        return _to_float(period.get(section, {}).get(key))
+
+    net_income_t = metric(current, "income", "netIncome")
+    cashflow_t = metric(current, "cashflow", "operatingCashflow")
+    gross_profit_t = metric(current, "income", "grossProfit")
+    gross_profit_t1 = metric(previous, "income", "grossProfit")
+    revenue_t = metric(current, "income", "totalRevenue")
+    revenue_t1 = metric(previous, "income", "totalRevenue")
+    total_assets_t = metric(current, "balance", "totalAssets")
+    total_assets_t1 = metric(previous, "balance", "totalAssets")
+    inventory_t = metric(current, "balance", "inventory")
+    inventory_t1 = metric(previous, "balance", "inventory")
+    receivables_t = metric(current, "balance", "netReceivables")
+    receivables_t1 = metric(previous, "balance", "netReceivables")
+
+    c_score_flags = {
+        "cash_vs_profit": net_income_t is not None and cashflow_t is not None and cashflow_t < net_income_t,
+        "gaap_quality": gross_profit_t is not None and gross_profit_t1 is not None and gross_profit_t < gross_profit_t1,
+        "margin_deterioration": revenue_t is not None and revenue_t1 not in (None, 0) and (gross_profit_t is not None and gross_profit_t1 is not None) and (gross_profit_t / revenue_t) < (gross_profit_t1 / revenue_t1),
+        "asset_turnover_drop": revenue_t is not None and revenue_t1 is not None and total_assets_t not in (None, 0) and total_assets_t1 not in (None, 0) and (revenue_t / total_assets_t) < (revenue_t1 / total_assets_t1),
+        "inventory_growth": inventory_t is not None and inventory_t1 is not None and inventory_t > inventory_t1,
+        "receivables_growth": receivables_t is not None and receivables_t1 is not None and receivables_t > receivables_t1,
+    }
+
+    available = [v for v in c_score_flags.values() if v is not None]
+    if not available:
+        return {"score": None, "available": False, "reason": "missing_metrics"}
+
+    score_raw = sum(1 for v in available if v)
+
+    if score_raw == 0:
+        normalized = 1.0
+    elif score_raw <= 2:
+        normalized = 0.8
+    elif score_raw <= 4:
+        normalized = 0.5
+    else:
+        normalized = 0.2
+
+    return {
+        "score_raw": score_raw,
+        "score": normalized,
+        "available": True,
+        "red_flags": c_score_flags,
+    }
+
+
+def quality_forensics_assessment(financials: Dict | None) -> Dict:
+    piotroski = _piotroski_f_score(financials)
+    beneish = _beneish_m_score(financials)
+    montier = _montier_c_score(financials)
+
+    components = {
+        "piotroski": (0.6, piotroski.get("score")),
+        "beneish": (0.25, beneish.get("score")),
+        "montier": (0.15, montier.get("score")),
+    }
+
+    total_weight = sum(weight for weight, score in components.values() if score is not None)
+    combined = None
+    if total_weight:
+        combined = sum(weight * score for weight, score in components.values() if score is not None) / total_weight
+
+    label = None
+    if combined is not None:
+        if combined >= 0.75:
+            label = "Stark"
+        elif combined >= 0.5:
+            label = "Gut"
+        elif combined >= 0.35:
+            label = "Schwach"
+        else:
+            label = "Auffällig"
+
+    return {
+        "score": combined,
+        "label": label,
+        "components": {
+            name: {
+                "weight": weight,
+                "score": score,
+                "available": (source.get("available") if isinstance(source, dict) else False),
+                "raw": source,
+            }
+            for (name, (weight, score)), source in zip(components.items(), [piotroski, beneish, montier])
+        },
+    }
+
+
+def final_assessment(value: Dict, quality: Dict) -> Dict:
+    value_score = value.get("score", 0.0)
+    quality_score = quality.get("score")
+
+    combined_score = value_score
+    quality_weight = 0.3
+    if quality_score is not None:
+        combined_score = 0.7 * value_score + quality_weight * quality_score
+
+    piotroski_component = quality.get("components", {}).get("piotroski", {})
+    piotroski_available = piotroski_component.get("raw", {}).get("available")
+    piotroski_score = piotroski_component.get("score")
+
+    gate_pass = True
+    gate_reason = None
+    if piotroski_available and piotroski_score is not None:
+        gate_pass = piotroski_score >= (5 / 9)
+        gate_reason = "piotroski_threshold" if not gate_pass else None
+    elif not piotroski_available:
+        gate_reason = "piotroski_data_missing"
+
+    if combined_score >= 0.8:
+        label = "Kaufen"
+    elif combined_score >= 0.6:
+        label = "Beobachten"
+    elif combined_score >= 0.4:
+        label = "Neutral"
+    else:
+        label = "Meiden"
+
+    return {
+        "score": combined_score,
+        "label": label,
+        "piotroski_gate_pass": gate_pass,
+        "gate_reason": gate_reason,
     }

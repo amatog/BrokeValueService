@@ -172,11 +172,13 @@ def value_score():
     d = davis_growth_quality(fundamentals)
     t = templeton_contrarian_value(fundamentals)
     k = klarman_margin_of_safety(fundamentals)
-    score = combined_value_score(g, b, gr, m, l, s, d, t, k, fundamentals)
+    financials = data_layer.get_financials_yoy(symbol)
+    score = combined_value_score(g, b, gr, m, l, s, d, t, k, fundamentals, financials)
 
     return jsonify(
         symbol=symbol,
         fundamentals=fundamentals,
+        financials=financials,
         graham=g,
         buffett=b,
         greenblatt=gr,
