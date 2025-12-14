@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Dict
+from typing import Dict, Any
 
 import requests
 from dotenv import load_dotenv
@@ -45,6 +45,144 @@ class DataLayer:
             data = self._dummy_fundamentals(symbol)
             data["source"] = "dummy-fallback"
             return data
+
+    # ---------------------------------------------------
+    # Growth-Daten (für Lynch / PEG etc.)
+    # ---------------------------------------------------
+    def get_growth(self, symbol: str) -> Dict[str, Any]:
+        """
+        Liefert Growth-Daten in einem stabilen Format.
+        Aktuell: eps_growth_5y (dezimal, z.B. 0.08 für 8%)
+        """
+        symbol = symbol.upper()
+
+        if self.use_dummy:
+            return {"eps_growth_5y": 0.08, "source": "dummy"}
+
+        # Wir nutzen hier dieselbe Berechnung wie in _alphavantage_fundamentals(),
+        # um doppelte Logik zu vermeiden. Alternativ kann man EARNINGS direkt erneut ziehen.
+        try:
+            fundamentals = self._alphavantage_fundamentals(symbol)
+            return {
+                "eps_growth_5y": fundamentals.get("earnings_growth_5y"),
+                "source": "alphavantage",
+            }
+        except Exception as e:
+            logger.exception("[DataLayer] Fehler bei get_growth, fallback auf Dummy: %s", e)
+            return {"eps_growth_5y": 0.08, "source": "dummy-fallback"}
+
+    # ---------------------------------------------------
+    # Income / Balance / Cashflow (für Piotroski/Beneish/Montier)
+    # ---------------------------------------------------
+    def get_income(self, symbol: str) -> Dict[str, Any]:
+        """
+        Returns AlphaVantage INCOME_STATEMENT response (or dummy with annualReports[0/1]).
+        """
+        symbol = symbol.upper()
+
+        if self.use_dummy:
+            # Minimal + Beneish/Montier relevant fields
+            return {
+                "annualReports": [
+                    {
+                        "fiscalDateEnding": "2024-12-31",
+                        "totalRevenue": 40_000_000,
+                        "grossProfit": 20_000_000,
+                        "netIncome": 5_000_000,
+                        "costOfRevenue": 20_000_000,
+                        # AV Key varies; we provide one common candidate
+                        "sellingGeneralAdministrative": 5_000_000,
+                        "depreciationAndAmortization": 1_000_000,
+                    },
+                    {
+                        "fiscalDateEnding": "2023-12-31",
+                        "totalRevenue": 38_000_000,
+                        "grossProfit": 18_000_000,
+                        "netIncome": 4_000_000,
+                        "costOfRevenue": 20_000_000,
+                        "sellingGeneralAdministrative": 4_800_000,
+                        "depreciationAndAmortization": 950_000,
+                    },
+                ],
+                "source": "dummy",
+            }
+
+        try:
+            data = self._get({"function": "INCOME_STATEMENT", "symbol": symbol})
+            data["source"] = "alphavantage"
+            return data
+        except Exception as e:
+            logger.exception("[DataLayer] Fehler bei get_income, fallback auf Dummy: %s", e)
+            return self.get_income(symbol="DUMMY")  # safe fallback shape
+
+    def get_balance(self, symbol: str) -> Dict[str, Any]:
+        """
+        Returns AlphaVantage BALANCE_SHEET response (or dummy with annualReports[0/1]).
+        """
+        symbol = symbol.upper()
+
+        if self.use_dummy:
+            return {
+                "annualReports": [
+                    {
+                        "fiscalDateEnding": "2024-12-31",
+                        "totalAssets": 50_000_000,
+                        "totalCurrentAssets": 12_000_000,
+                        "totalCurrentLiabilities": 6_000_000,
+                        "longTermDebt": 10_000_000,
+                        "totalDebt": 12_000_000,
+                        # Beneish DSRI:
+                        "netReceivables": 3_000_000,
+                        # Montier inventory:
+                        "totalInventory": 2_000_000,
+                        # Beneish AQI / DEPI:
+                        "propertyPlantEquipment": 15_000_000,
+                    },
+                    {
+                        "fiscalDateEnding": "2023-12-31",
+                        "totalAssets": 48_000_000,
+                        "totalCurrentAssets": 10_000_000,
+                        "totalCurrentLiabilities": 6_500_000,
+                        "longTermDebt": 11_000_000,
+                        "totalDebt": 13_000_000,
+                        "netReceivables": 2_600_000,
+                        "totalInventory": 1_800_000,
+                        "propertyPlantEquipment": 14_500_000,
+                    },
+                ],
+                "source": "dummy",
+            }
+
+        try:
+            data = self._get({"function": "BALANCE_SHEET", "symbol": symbol})
+            data["source"] = "alphavantage"
+            return data
+        except Exception as e:
+            logger.exception("[DataLayer] Fehler bei get_balance, fallback auf Dummy: %s", e)
+            return self.get_balance(symbol="DUMMY")
+
+    def get_cashflow(self, symbol: str) -> Dict[str, Any]:
+        """
+        Returns AlphaVantage CASH_FLOW response (or dummy with annualReports[0/1]).
+        """
+        symbol = symbol.upper()
+
+        if self.use_dummy:
+            return {
+                "annualReports": [
+                    {"fiscalDateEnding": "2024-12-31", "operatingCashflow": 6_000_000},
+                    {"fiscalDateEnding": "2023-12-31", "operatingCashflow": 4_500_000},
+                ],
+                "source": "dummy",
+            }
+
+        try:
+            data = self._get({"function": "CASH_FLOW", "symbol": symbol})
+            data["source"] = "alphavantage"
+            return data
+        except Exception as e:
+            logger.exception("[DataLayer] Fehler bei get_cashflow, fallback auf Dummy: %s", e)
+            return self.get_cashflow(symbol="DUMMY")
 
     # ---------------------------------------------------
     # Dummy-Daten
@@ -127,7 +265,6 @@ class DataLayer:
             except Exception as e:
                 logger.warning("[DataLayer] Konnte debt_to_equity nicht berechnen: %s", e)
 
-
         # ---------- earnings_growth_5y aus EARNINGS ----------
         earnings_growth_5y = None
         try:
@@ -155,7 +292,6 @@ class DataLayer:
         except Exception as e:
             logger.warning("[DataLayer] Konnte earnings_growth_5y nicht berechnen: %s", e)
 
-
         return {
             "symbol": symbol,
             "price": to_float(q.get("05. price")),
@@ -182,6 +318,10 @@ class DataLayer:
         if "Note" in data or "Information" in data:
             logger.warning("[DataLayer] AlphaVantage Hinweis/Limit: %s", data)
         return data
+
+    # ---------------------------------------------------
+    # Legacy / Helper: YOY financials as merged dicts (still usable)
+    # ---------------------------------------------------
     def get_financials_yoy(self, symbol: str):
         """
         Returns: (cur, prev) dicts for Piotroski.

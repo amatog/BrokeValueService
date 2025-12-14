@@ -4,20 +4,20 @@ from flask import Flask, jsonify, request
 
 from data_layer import DataLayer
 from strategies import (
-    graham_valuation,
-    buffett_quality,
-    greenblatt_magic_formula,
+    graham_strategy,
+    buffett_strategy,
+    greenblatt_strategy,
+    munger_strategy,
+    lynch_strategy,
+    schloss_strategy,
+    davis_strategy,
+    templeton_strategy,
+    klarman_strategy,
     combined_value_score,
-    munger_quality,
-    lynch_growth_value,
-    schloss_deep_value,
-    davis_growth_quality,
-    templeton_contrarian_value,
-    klarman_margin_of_safety,
     piotroski_f_score,
     beneish_penalty,
     montier_penalty,
-    finalize_assessment,
+    run_default_value_bundle,
 )
 
 app = Flask(__name__)
@@ -54,15 +54,15 @@ def debug_strategy_keys():
     fundamentals = data_layer.get_basic_fundamentals(symbol)
 
     strategies = {
-        "graham": graham_valuation(fundamentals),
-        "buffett": buffett_quality(fundamentals),
-        "greenblatt": greenblatt_magic_formula(fundamentals),
-        "munger": munger_quality(fundamentals),
-        "lynch": lynch_growth_value(fundamentals),
-        "schloss": schloss_deep_value(fundamentals),
-        "davis": davis_growth_quality(fundamentals),
-        "templeton": templeton_contrarian_value(fundamentals),
-        "klarman": klarman_margin_of_safety(fundamentals),
+        "graham": graham_strategy(fundamentals),
+        "buffett": buffett_strategy(fundamentals),
+        "greenblatt": greenblatt_strategy(fundamentals),
+        "munger": munger_strategy(fundamentals),
+        "lynch": lynch_strategy(fundamentals),
+        "schloss": schloss_strategy(fundamentals),
+        "davis": davis_strategy(fundamentals),
+        "templeton": templeton_strategy(fundamentals),
+        "klarman": klarman_strategy(fundamentals),
     }
 
     return jsonify({
@@ -88,7 +88,7 @@ def value_graham():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    g = graham_valuation(fundamentals)
+    g = graham_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, graham=g)
 
 
@@ -99,7 +99,7 @@ def value_buffett():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    b = buffett_quality(fundamentals)
+    b = buffett_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, buffett=b)
 
 
@@ -110,7 +110,7 @@ def value_greenblatt():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    gr = greenblatt_magic_formula(fundamentals)
+    gr = greenblatt_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, greenblatt=gr)
 
 @app.route("/munger", methods=["GET"])
@@ -121,7 +121,7 @@ def value_munger():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    m = munger_quality(fundamentals)
+    m = munger_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, munger=m)
 
 @app.route("/lynch", methods=["GET"])
@@ -132,7 +132,7 @@ def value_lynch():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    l = lynch_growth_value(fundamentals)
+    l = lynch_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, lynch=l)
 
 
@@ -144,7 +144,7 @@ def value_schloss():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    s = schloss_deep_value(fundamentals)
+    s = schloss_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, schloss=s)
 
 
@@ -156,7 +156,7 @@ def value_davis():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    d = davis_growth_quality(fundamentals)
+    d = davis_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, davis=d)
 
 
@@ -168,7 +168,7 @@ def value_templeton():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    t = templeton_contrarian_value(fundamentals)
+    t = templeton_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, templeton=t)
 
 
@@ -180,7 +180,7 @@ def value_klarman():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    k = klarman_margin_of_safety(fundamentals)
+    k = klarman_strategy(fundamentals)
     return jsonify(symbol=symbol, fundamentals=fundamentals, klarman=k)
 
 
@@ -191,40 +191,59 @@ def value_score():
     if error_response:
         return error_response, status
 
+    # Optional: sector aus Query (für overrides / weights)
+    sector = request.args.get("sector")
+
+    # ----------------------------
+    # Datenbeschaffung (Data Layer)
+    # ----------------------------
+    # Snapshot-Daten (für klassische Strategien)
     fundamentals = data_layer.get_basic_fundamentals(symbol)
+    growth = data_layer.get_growth(symbol)
 
-    g = graham_valuation(fundamentals)
-    b = buffett_quality(fundamentals)
-    gr = greenblatt_magic_formula(fundamentals)
-    m = munger_quality(fundamentals)
-    l = lynch_growth_value(fundamentals)
-    s = schloss_deep_value(fundamentals)
-    d = davis_growth_quality(fundamentals)
-    t = templeton_contrarian_value(fundamentals)
-    k = klarman_margin_of_safety(fundamentals)
+    # Perioden-Daten (für Piotroski/Beneish/Montier)
+    income = data_layer.get_income(symbol)
+    balance = data_layer.get_balance(symbol)
+    cashflow = data_layer.get_cashflow(symbol)
 
-    value = combined_value_score(g, b, gr, m, l, s, d, t, k, fundamentals)
+    # ----------------------------
+    # Einzelstrategien (Snapshot-based)
+    # ----------------------------
+    g = graham_strategy(fundamentals, sector=sector)
+    b = buffett_strategy(fundamentals, sector=sector)
+    gr = greenblatt_strategy(fundamentals, sector=sector)
+    m = munger_strategy(fundamentals, sector=sector)
+    l = lynch_strategy(fundamentals, growth, sector=sector)  # growth required
+    s = schloss_strategy(fundamentals, sector=sector)
+    d = davis_strategy(fundamentals, sector=sector)
+    t = templeton_strategy(fundamentals, sector=sector)
+    k = klarman_strategy(fundamentals, sector=sector)
 
-    # Quality & Forensics (Profil A: beneish/montier optional, aber stabil)
-    fin_cur, fin_prev = data_layer.get_financials_yoy(symbol)
-    piot = piotroski_f_score(fin_cur, fin_prev)
+    # ----------------------------
+    # Quality & Forensics (Period-based)
+    # ----------------------------
+    piot = piotroski_f_score(income, balance, cashflow, sector=sector)
+    bene = beneish_penalty(income, balance, cashflow, sector=sector)
+    mont = montier_penalty(income, balance, cashflow, sector=sector)
 
-    # Falls du M/C noch nicht berechnest: None => available=false, penalty=0
-    bene = beneish_penalty(m_score=None)
-    mont = montier_penalty(c_score=None, red_flags=[])
-
-    final = finalize_assessment(
-        value_score_01=value.get("value_score", 0.0),
-        piotroski=piot,
-        beneish=bene,
-        montier=mont,
+    # ----------------------------
+    # Gewichtete, konfigurationsbasierte Aggregation (no magic numbers)
+    # ----------------------------
+    value = combined_value_score(
+        g, b, gr, m, l, s, d, t, k, piot, bene, mont,
+        sector=sector
     )
 
+    # ----------------------------
+    # Response (UI ohne Sonderfälle)
+    # ----------------------------
     return jsonify(
         symbol=symbol,
+        sector=sector,
         fundamentals=fundamentals,
+        growth=growth,
 
-        # einzelne Strategien (wie bisher)
+        # einzelne Strategien
         graham=g,
         buffett=b,
         greenblatt=gr,
@@ -235,15 +254,39 @@ def value_score():
         templeton=t,
         klarman=k,
 
-        # UI braucht nur diese 3 Blöcke und hat nie Sonderfälle
+        # Gesamtbewertung
         value=value,
+
+        # Quality/Forensics Block
         quality_forensics={
             "piotroski": piot,
             "beneish": bene,
             "montier": mont,
         },
-        final_assessment=final,
     )
+
+
+
+@app.route("/bundle", methods=["GET"])
+def bundle():
+    symbol = request.args.get("symbol", "").upper().strip()
+    sector = request.args.get("sector")  # optional
+
+    fundamentals = data_layer.get_basic_fundamentals(symbol)
+    growth = data_layer.get_growth(symbol)
+    income = data_layer.get_income(symbol)
+    balance = data_layer.get_balance(symbol)
+    cashflow = data_layer.get_cashflow(symbol)
+
+    return jsonify(run_default_value_bundle(
+        fundamentals=fundamentals,
+        growth=growth,
+        income=income,
+        balance=balance,
+        cashflow=cashflow,
+        sector=sector
+    ))
+
 
 
 
