@@ -1,0 +1,16 @@
+version: "v1_baseline"
+aggregation:
+  insufficient_data_factor: 0.25
+  weights:
+    Graham (vereinfacht): 1.0
+    Buffett-Qualität (vereinfacht): 1.2
+    Greenblatt Magic Formula (vereinfacht): 1.1
+    Munger (vereinfacht): 1.2
+    Peter Lynch (vereinfacht): 1.0
+    Schloss (vereinfacht): 0.9
+    Davis (vereinfacht): 1.0
+    Templeton (vereinfacht): 0.9
+    Klarman (vereinfacht): 1.1
+    Piotroski F-Score: 1.1
+    Beneish M-Score (Penalty): 0.9
+    Montier C-Score (Penalty): 0.9

@@ -1,0 +1,42 @@
+run:
+  run_id: local_smoke_001
+  asof_dates:
+  - '2025-12-01'
+engine:
+  mode: DIRECT
+  value_base_url: http://localhost:8001
+  timeout_seconds: 25
+universe:
+  symbols:
+  - AZN
+  - AAPL
+output:
+  out_dir: backtest_runs
+  write_csv: true
+  write_jsonl: true
+db:
+  enabled: true
+  type: postgres
+  host: localhost
+  port: 5432
+  database: mybrokerdb
+  username: broker_user
+  password: brokerPwd
+  table: bt_snapshot
+returns:
+  horizons_months:
+  - 6
+  - 12
+  - 24
+  price_source:
+    mode: CSV
+    csv_path: prices/daily.csv
+    date_col: date
+    symbol_col: symbol
+    price_col: close
+buckets:
+  scheme: quintiles
+  by_sector: false
+  min_rows_per_sector: 30
+calibration:
+  max_candidates: 200

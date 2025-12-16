@@ -1,0 +1,7 @@
+search:
+  weights:
+    Piotroski F-Score: [0.8, 1.0, 1.2]
+    Beneish M-Score (Penalty): [0.7, 0.9, 1.1]
+    Montier C-Score (Penalty): [0.7, 0.9, 1.1]
+    Graham (vereinfacht): [0.8, 1.0, 1.2]
+  insufficient_data_factor: [0.2, 0.25, 0.3]
