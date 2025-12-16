@@ -1,3 +1,10 @@
 flask
 requests
 python-dotenv
+numpy
+pandas
+scikit-learn
+scipy
+joblib
+pyarrow
+psycopg2-binary

@@ -1,15 +1,19 @@
 run:
-  run_id: local_smoke_001
+  run_id: cal_20251216_091755_0007 #local_smoke_001
   asof_dates:
-  - '2025-12-01'
+    - "2024-12-01"
+    - "2025-01-01"
+    - "2025-02-01"
+    - "2025-03-01"
+    - "2025-04-01"
+    - "2025-05-01"
+    - "2025-06-01"
 engine:
   mode: DIRECT
   value_base_url: http://localhost:8001
   timeout_seconds: 25
 universe:
-  symbols:
-  - AZN
-  - AAPL
+  symbols: [AAPL, AZN, MSFT, AMZN, GOOGL, META, TSLA, NVDA, CAT]
 output:
   out_dir: backtest_runs
   write_csv: true

@@ -1,0 +1,63 @@
+schema_version: 1
+
+# Identifiers (immer behalten)
+id_cols:
+  - run_id
+  - asof_date
+  - symbol
+
+# Labels (immer behalten)
+label_cols:
+  - label_return
+  - label_up
+
+# Optional Meta (wenn vorhanden)
+meta_cols:
+  - sector
+  - currency
+  - engine_mode
+  - engine_base_url
+  - created_at
+
+# Welche Feature-Namespaces sind erlaubt?
+# Empfehlung: Für ML zuerst nur "features_json" (stabil, flach, numeric-lastig).
+allow_prefixes:
+  - "json.features_json."
+
+# Optional: später erweitern, aber erst nach Review (RAW ist groß + noisy):
+#  - "json.raw_json."
+
+# Harte Exclusions (Leakage, Debug, große Strukturen, nicht-stabile Checks)
+drop_exact:
+  - "json.raw_json.combined.components"          # Liste/Objekt, nicht tabellarisch
+  - "json.raw_json.combined.aggregation.weights_used"  # Map/Objekt
+  - "json.raw_json._engine_mode"
+  - "json.raw_json._engine_base_url"
+
+# Regex-basierte Drops (alles was erfahrungsgemäß “nicht Feature” ist)
+drop_regex:
+  - "^json\\.raw_json\\..*\\.checks(\\.|$)"      # Debug checks
+  - "^json\\.raw_json\\..*\\.missing_data(\\.|$)"# Debug missing flags (nutzen wir sauberer später)
+  - "^json\\.raw_json\\..*\\.thresholds_used(\\.|$)" # hyper-parameter leakage/unstable
+  - "^json\\.raw_json\\..*\\.metrics\\.red_flags$"    # Liste
+  - "^json\\.raw_json\\..*\\.metrics\\.red_flags\\."  # Liste expandiert
+
+# Optional: Ratings als kategorische Features erlauben?
+# In v1 lassen wir Ratings als Text drin, und encoden erst im nächsten Schritt.
+categorical_cols:
+  - "json.features_json.sector"
+  - "json.features_json.currency"
+  - "json.features_json.value_rating"
+
+# Numerische Coercion: welche Prefixe sollen zwingend numerisch werden?
+force_numeric_prefixes:
+  - "json.features_json."
+
+# Missing-Policy (v1: simpel, deterministisch)
+missing:
+  strategy: "fillna_zero"   # Alternativen später: median_by_column
+  add_missing_indicators: true
+
+# Output Naming
+output:
+  version_tag: "v1"
