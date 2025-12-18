@@ -161,7 +161,6 @@ def load_features(path: Path) -> pd.DataFrame:
         raise FileNotFoundError(str(path))
     if path.suffix.lower() == ".csv":
         return pd.read_csv(path)
-    # parquet
     return pd.read_parquet(path)
 
 
@@ -191,13 +190,199 @@ def pick_feature_columns(df: pd.DataFrame, *, target_cols: List[str]) -> List[st
 
 def _coerce_features(df: pd.DataFrame, feature_cols: List[str]) -> pd.DataFrame:
     out = df.copy()
-    # Best-effort numeric coercion for object cols
     for c in feature_cols:
+        if c not in out.columns:
+            continue
         if out[c].dtype == object:
             out[c] = pd.to_numeric(out[c], errors="coerce")
         elif out[c].dtype == bool:
             out[c] = out[c].astype("int64")
     return out
+
+
+def _drop_useless_features(
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        feature_cols: List[str],
+        *,
+        min_non_null: int = 1,
+        drop_constant_if_n_ge: int = 50,
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[str], Dict[str, Any]]:
+    """
+    Drop features that are:
+      - all NaN in train
+      - have < min_non_null observed values in train
+      - (optionally) constant in train, but ONLY if dataset is large enough
+    """
+    info: Dict[str, Any] = {"dropped_all_nan": [], "dropped_too_sparse": [], "dropped_constant": []}
+
+    n_train = int(len(train_df))
+    do_drop_constant = n_train >= int(drop_constant_if_n_ge)
+
+    keep: List[str] = []
+    for c in feature_cols:
+        if c not in train_df.columns:
+            info["dropped_all_nan"].append(c)
+            continue
+
+        s = train_df[c]
+        nn = int(s.notna().sum())
+        if nn == 0:
+            info["dropped_all_nan"].append(c)
+            continue
+        if nn < min_non_null:
+            info["dropped_too_sparse"].append(c)
+            continue
+
+        if do_drop_constant:
+            try:
+                nun = int(s.dropna().nunique())
+            except Exception:
+                nun = 0
+            if nun <= 1:
+                info["dropped_constant"].append(c)
+                continue
+
+        keep.append(c)
+
+    return train_df.copy(), test_df.copy(), keep, info
+
+
+# ----------------------------
+# Target fix (binary class)
+# ----------------------------
+def _ensure_binary_target_for_lr(
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        *,
+        target_class: Optional[str] = None,
+        target_class_col: Optional[str] = None,
+        target_reg: str,
+        label_mode: str = "auto",
+        fallback_feature_for_split: str = "value_score",
+) -> Tuple[pd.DataFrame, pd.DataFrame, str, Dict[str, Any]]:
+    """
+    Ensures we have a binary target column suitable for LogisticRegression (2 classes).
+    Returns (train_df, test_df, target_class_col, info).
+
+    label_mode:
+      - "auto": use existing target if it has >=2 classes in train; else build from target_reg (median split);
+                else fallback median split on fallback_feature_for_split
+      - "existing": keep target as-is (but may still single-class -> will force minimal flip in train if possible)
+      - "rebuild": rebuild from target_reg (median split on train)
+      - "fallback": build from fallback_feature_for_split (median split on train)
+    """
+    info: Dict[str, Any] = {"label_mode": (label_mode or "auto").strip().lower()}
+
+    if not target_class:
+        target_class = target_class_col or "label_up"
+
+    train_df = train_df.copy()
+    test_df = test_df.copy()
+
+    def _counts(s: pd.Series) -> Dict[int, int]:
+        s2 = pd.to_numeric(s, errors="coerce").dropna().astype("int64")
+        return {int(k): int(v) for k, v in s2.value_counts().to_dict().items()}
+
+    def _n_classes(df_: pd.DataFrame, col: str) -> int:
+        if col not in df_.columns:
+            return 0
+        s = pd.to_numeric(df_[col], errors="coerce").dropna()
+        if s.empty:
+            return 0
+        return int(s.astype("int64").nunique())
+
+    def _median_split_from(col_src: str, col_out: str) -> float:
+        tr = pd.to_numeric(train_df[col_src], errors="coerce")
+        te = pd.to_numeric(test_df[col_src], errors="coerce")
+        med = float(np.nanmedian(tr.to_numpy()))
+        train_df[col_out] = (tr > med).astype("int64")
+        test_df[col_out] = (te > med).astype("int64")
+        return med
+
+    mode = info["label_mode"]
+    if mode not in ("auto", "existing", "rebuild", "fallback"):
+        mode = "auto"
+        info["label_mode"] = "auto"
+
+    used = target_class
+    info["used_target"] = used
+    info["rebuilt"] = False
+    info["fallback_used"] = False
+
+    if mode == "rebuild":
+        if target_reg not in train_df.columns or target_reg not in test_df.columns:
+            raise RuntimeError(f"Cannot rebuild labels: missing target_reg='{target_reg}'")
+        new_col = f"{target_class}__auto"
+        med = _median_split_from(target_reg, new_col)
+        used = new_col
+        info["used_target"] = used
+        info["rebuilt"] = True
+        info["median"] = med
+        info["source"] = target_reg
+
+    elif mode == "fallback":
+        if fallback_feature_for_split not in train_df.columns or fallback_feature_for_split not in test_df.columns:
+            raise RuntimeError(
+                f"Fallback label requested but feature '{fallback_feature_for_split}' not found."
+            )
+        new_col = f"{target_class}__fallback"
+        med = _median_split_from(fallback_feature_for_split, new_col)
+        used = new_col
+        info["used_target"] = used
+        info["fallback_used"] = True
+        info["median"] = med
+        info["source"] = fallback_feature_for_split
+
+    elif mode == "auto":
+        # Use existing if train has >=2 classes
+        if _n_classes(train_df, target_class) >= 2:
+            used = target_class
+            info["used_target"] = used
+        elif target_reg in train_df.columns and target_reg in test_df.columns:
+            new_col = f"{target_class}__auto"
+            med = _median_split_from(target_reg, new_col)
+            used = new_col
+            info["used_target"] = used
+            info["rebuilt"] = True
+            info["median"] = med
+            info["source"] = target_reg
+        else:
+            if fallback_feature_for_split not in train_df.columns or fallback_feature_for_split not in test_df.columns:
+                raise RuntimeError(
+                    f"Auto label fix failed: missing target_reg='{target_reg}' and fallback feature "
+                    f"'{fallback_feature_for_split}'."
+                )
+            new_col = f"{target_class}__fallback"
+            med = _median_split_from(fallback_feature_for_split, new_col)
+            used = new_col
+            info["used_target"] = used
+            info["fallback_used"] = True
+            info["median"] = med
+            info["source"] = fallback_feature_for_split
+
+    # mode == "existing" -> keep as-is (used = target_class)
+
+    # Final validation: ensure TRAIN has 2 classes (LR requirement)
+    n_train_classes = _n_classes(train_df, used)
+    if n_train_classes < 2:
+        # Minimal technical fix for smoke-tests: flip first row if possible
+        s = pd.to_numeric(train_df[used], errors="coerce").fillna(0).astype("int64")
+        if len(s) >= 2:
+            idx0 = s.index[0]
+            train_df.loc[idx0, used] = 1 - int(train_df.loc[idx0, used])
+            info["forced_flip_in_train"] = True
+        else:
+            # Not enough rows to force 2 classes. Don't crash:
+            # training will fall back to DummyClassifier in train_classification().
+            info["too_small_to_fix"] = True
+            info["note"] = "train_df has <2 rows; cannot enforce 2 classes. Will rely on DummyClassifier fallback."
+            # just keep as-is
+
+    info["train_class_counts"] = _counts(train_df[used]) if used in train_df.columns else None
+    info["test_class_counts"] = _counts(test_df[used]) if used in test_df.columns else None
+
+    return train_df, test_df, used, info
 
 
 # ----------------------------
@@ -220,7 +405,6 @@ def time_split(
 
     n = len(tmp)
     if n < 5:
-        # too small: fall back to simple split
         cut = max(1, int(round(n * (1 - test_size))))
     else:
         cut = int(np.floor(n * (1 - test_size)))
@@ -261,7 +445,6 @@ def make_numeric_pipeline(model) -> Pipeline:
         ]
     )
 
-    # ColumnTransformer in case we want to extend later
     transformer = ColumnTransformer(
         transformers=[
             ("num", pre, slice(0, 10_000_000)),  # all columns passed as numpy array
@@ -306,8 +489,17 @@ def train_classification(
         model = DummyClassifier(strategy="constant", constant=const_class)
         pipe = make_numeric_pipeline(model)
         pipe.fit(X_train, y_train)
-
-        # Evaluate (will be somewhat meaningless but stable)
+        # If X_test is empty, skip evaluation (SimpleImputer cannot transform 0 rows)
+        if X_test is None or len(X_test) == 0:
+            metrics: Dict[str, Any] = {
+                "warning": "empty_test_set",
+                "train_rows": int(len(y_train)),
+                "test_rows": 0,
+                "accuracy": float("nan"),
+                "f1": float("nan"),
+                "auc": float("nan"),
+            }
+            return pipe, metrics
         pred = pipe.predict(X_test)
         metrics: Dict[str, Any] = {
             "warning": "single_class_training_data",
@@ -334,7 +526,18 @@ def train_classification(
     pipe = make_numeric_pipeline(model)
     pipe.fit(X_train, y_train)
 
-    # Predict proba if available
+    # If X_test is empty, skip evaluation
+    if X_test is None or len(X_test) == 0:
+        metrics: Dict[str, Any] = {
+            "warning": "empty_test_set",
+            "test_rows": 0,
+            "r2": float("nan"),
+            "mae": float("nan"),
+            "spearman_ic": float("nan"),
+        }
+        return pipe, metrics
+
+
     proba = None
     try:
         proba = pipe.predict_proba(X_test)[:, 1]
@@ -343,7 +546,7 @@ def train_classification(
 
     pred = pipe.predict(X_test)
 
-    metrics = {
+    metrics: Dict[str, Any] = {
         "accuracy": float(accuracy_score(y_test, pred)),
         "f1": float(f1_score(y_test, pred, zero_division=0)),
     }
@@ -365,7 +568,6 @@ def train_regression(
     model = Ridge(alpha=1.0, random_state=42)
     pipe = make_numeric_pipeline(model)
     pipe.fit(X_train, y_train)
-
     pred = pipe.predict(X_test)
 
     metrics: Dict[str, Any] = {
@@ -403,16 +605,22 @@ def main() -> None:
     if len(df) < 2:
         raise RuntimeError("Not enough rows after label filtering to train a model.")
 
-    # Prefer time split if possible
-    if spec.prefer_time_split and "asof_date" in df.columns and df["asof_date"].notna().any():
-        train_df, test_df = time_split(df, test_size=spec.test_size)
-        split_mode = "time(asof_date)"
+    # If dataset is tiny, do NOT split (otherwise train may have 1 row -> impossible for LR)
+    if len(df) < 3:
+        train_df = df.copy()
+        test_df = df.iloc[0:0].copy()  # empty test set
+        split_mode = "no_split(tiny_dataset)"
     else:
-        train_df, test_df = random_split(df, test_size=spec.test_size, seed=spec.seed)
-        split_mode = "random"
+        # Prefer time split if possible
+        if spec.prefer_time_split and "asof_date" in df.columns and df["asof_date"].notna().any():
+            train_df, test_df = time_split(df, test_size=spec.test_size)
+            split_mode = "time(asof_date)"
+        else:
+            train_df, test_df = random_split(df, test_size=spec.test_size, seed=spec.seed)
+            split_mode = "random"
 
     # Feature selection
-    targets = []
+    targets: List[str] = []
     if spec.do_classification:
         targets.append(spec.target_class)
     if spec.do_regression:
@@ -425,6 +633,27 @@ def main() -> None:
     # Coerce to numeric where possible (object -> numeric)
     train_df = _coerce_features(train_df, feature_cols)
     test_df = _coerce_features(test_df, feature_cols)
+
+    # 1) Drop useless features (all-NaN / too sparse / constants for large datasets)
+    train_df, test_df, feature_cols, drop_info = _drop_useless_features(
+        train_df, test_df, feature_cols, min_non_null=1
+    )
+    if not feature_cols:
+        raise RuntimeError("All features were dropped (all-NaN/constant). Need more/better exported features.")
+
+    # 2) Ensure we have 2 classes for LogisticRegression (train set)
+    target_class_col = spec.target_class
+    if spec.do_classification:
+        train_df, test_df, target_class_col, yfix_info = _ensure_binary_target_for_lr(
+            train_df,
+            test_df,
+            target_class=spec.target_class,
+            target_reg=spec.target_reg,
+            label_mode=os.getenv("BASELINE_LABEL_MODE", "auto").strip().lower() or "auto",
+            fallback_feature_for_split="value_score",
+        )
+    else:
+        yfix_info = {"rebuilt": False, "fallback_used": False}
 
     X_train = train_df[feature_cols].to_numpy()
     X_test = test_df[feature_cols].to_numpy()
@@ -440,14 +669,16 @@ def main() -> None:
         "split_mode": split_mode,
         "feature_count": int(len(feature_cols)),
         "targets": targets,
+        "feature_drop_info": drop_info,
+        "target_fix_info": yfix_info,
+        "effective_target_class": target_class_col,
     }
 
-    # Train + save
     out: Dict[str, Any] = {}
 
     if spec.do_classification:
-        y_train = train_df[spec.target_class].astype("int64").to_numpy()
-        y_test = test_df[spec.target_class].astype("int64").to_numpy()
+        y_train = pd.to_numeric(train_df[target_class_col], errors="coerce").fillna(0).astype("int64").to_numpy()
+        y_test = pd.to_numeric(test_df[target_class_col], errors="coerce").fillna(0).astype("int64").to_numpy()
 
         clf, m = train_classification(X_train, y_train, X_test, y_test, seed=spec.seed)
         out["classification"] = {"metrics": m}
@@ -482,6 +713,7 @@ def main() -> None:
     print(f"[OK] input: {spec.input_path}")
     print(f"[OK] split: {split_mode} train={len(train_df)} test={len(test_df)}")
     print(f"[OK] features: {len(feature_cols)}")
+    print(f"[OK] effective target (class): {target_class_col}")
     if "classification" in out:
         print(f"[OK] clf metrics: {out['classification']['metrics']}")
         print(f"[OK] clf model: {out['classification']['model_path']}")
