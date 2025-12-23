@@ -53,3 +53,36 @@ buckets:
   min_rows_per_sector: 30
 calibration:
   max_candidates: 200
+ml_export:
+  run_id: "local_smoke_001"          # oder leer lassen => nimmt run.run_id
+  horizon_months: 12                 # Label-Horizont aus bt_return
+  snapshot_table: "bt_snapshot"
+  return_table: "bt_return"
+  bucket_report_table: "bt_bucket_report"   # optional (nicht zwingend)
+
+  # Output
+  out_dir: "datasets"                # im Projektroot
+  format: "parquet"                  # parquet | csv
+  include_raw_json: false            # features_json/raw_json mit exportieren? (meist false)
+
+  # Feature selection
+  feature_source: "features_json"    # features_json | columns_only
+  drop_prefixes: ["raw.", "debug."]  # optional: Prefixe entfernen, falls in JSON vorhanden
+  keep_columns:
+    - symbol
+    - asof_date
+    - sector
+    - value_score
+    - value_rating
+
+  # Split
+  split:
+    mode: "time"                     # time | none
+    cutoff_date: "2023-01-01"        # train < cutoff, valid >= cutoff
+
+ml:
+  input_root: C:/projects/ValueServices/data
+  output_root: C:/projects/ValueServices/data_ml/phase_3_1
+  split:
+    mode: time
+
