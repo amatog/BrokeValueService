@@ -8,3 +8,5 @@ scipy
 joblib
 pyarrow
 psycopg2-binary
+PyYAML
+python-dateutil

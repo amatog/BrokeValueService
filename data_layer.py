@@ -17,10 +17,9 @@ class DataLayer:
 
     def __init__(self) -> None:
         self.api_key = os.getenv(self.ENV_NAME)
-        logger.info("[DataLayer] %s = %r", self.ENV_NAME, self.api_key)
         if not self.api_key:
-            logger.error("[DataLayer] Kein API-Key gefunden – verwende Dummy-Daten.")
-            self.use_dummy = True
+            self.use_dummy = os.getenv("VALUE_ALLOW_DUMMY", "").lower() == "true"
+            logger.warning("[DataLayer] Kein API-Key gefunden; Dummy-Modus=%s", self.use_dummy)
         else:
             logger.info("[DataLayer] API-Key gefunden – verwende AlphaVantage.")
             self.use_dummy = False
@@ -41,10 +40,8 @@ class DataLayer:
             data["source"] = "alphavantage"
             return data
         except Exception as e:
-            logger.exception("[DataLayer] Fehler bei AlphaVantage, fallback auf Dummy: %s", e)
-            data = self._dummy_fundamentals(symbol)
-            data["source"] = "dummy-fallback"
-            return data
+            logger.warning("Fundamentals unavailable (%s)", type(e).__name__)
+            return {"symbol": symbol, "source": "unavailable"}
 
     # ---------------------------------------------------
     # Growth-Daten (für Lynch / PEG etc.)
@@ -68,8 +65,8 @@ class DataLayer:
                 "source": "alphavantage",
             }
         except Exception as e:
-            logger.exception("[DataLayer] Fehler bei get_growth, fallback auf Dummy: %s", e)
-            return {"eps_growth_5y": 0.08, "source": "dummy-fallback"}
+            logger.warning("Growth unavailable (%s)", type(e).__name__)
+            return {"eps_growth_5y": None, "source": "unavailable"}
 
     # ---------------------------------------------------
     # Income / Balance / Cashflow (für Piotroski/Beneish/Montier)
@@ -112,8 +109,8 @@ class DataLayer:
             data["source"] = "alphavantage"
             return data
         except Exception as e:
-            logger.exception("[DataLayer] Fehler bei get_income, fallback auf Dummy: %s", e)
-            return self.get_income(symbol="DUMMY")  # safe fallback shape
+            logger.warning("Income unavailable (%s)", type(e).__name__)
+            return {"annualReports": [], "source": "unavailable"}
 
     def get_balance(self, symbol: str) -> Dict[str, Any]:
         """
@@ -158,8 +155,8 @@ class DataLayer:
             data["source"] = "alphavantage"
             return data
         except Exception as e:
-            logger.exception("[DataLayer] Fehler bei get_balance, fallback auf Dummy: %s", e)
-            return self.get_balance(symbol="DUMMY")
+            logger.warning("Balance unavailable (%s)", type(e).__name__)
+            return {"annualReports": [], "source": "unavailable"}
 
     def get_cashflow(self, symbol: str) -> Dict[str, Any]:
         """
@@ -181,8 +178,8 @@ class DataLayer:
             data["source"] = "alphavantage"
             return data
         except Exception as e:
-            logger.exception("[DataLayer] Fehler bei get_cashflow, fallback auf Dummy: %s", e)
-            return self.get_cashflow(symbol="DUMMY")
+            logger.warning("Cashflow unavailable (%s)", type(e).__name__)
+            return {"annualReports": [], "source": "unavailable"}
 
     # ---------------------------------------------------
     # Dummy-Daten
@@ -311,12 +308,14 @@ class DataLayer:
     # HTTP-Helfer
     # ---------------------------------------------------
     def _get(self, params: Dict) -> Dict:
+        if not self.api_key:
+            raise ValueError("Provider API key is not configured")
         params = {**params, "apikey": self.api_key}
         resp = requests.get(self.BASE_URL, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        if "Note" in data or "Information" in data:
-            logger.warning("[DataLayer] AlphaVantage Hinweis/Limit: %s", data)
+        if not isinstance(data, dict) or not data or any(k in data for k in ("Note", "Information", "Error Message")):
+            raise ValueError("Provider returned an error or empty response")
         return data
 
     # ---------------------------------------------------

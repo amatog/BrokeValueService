@@ -21,6 +21,8 @@ class ValueRestEngine(SnapshotEngine):
 
     def snapshot(self, symbol: str, asof: Optional[str] = None) -> Dict[str, Any]:
         url = self.base_url.rstrip("/") + "/bundle"
+        if asof:
+            raise ValueError("Historical snapshots require point-in-time fundamentals and are disabled.")
         params = {"symbol": symbol}
         # future-proof; kann später serverseitig genutzt werden
         if asof:
@@ -36,8 +38,8 @@ class DirectStrategyEngine(SnapshotEngine):
     data_layer: DataLayer
 
     def snapshot(self, symbol: str, asof: Optional[str] = None) -> Dict[str, Any]:
-        # Hinweis: asof wird hier noch nicht genutzt (AlphaVantage liefert "latest").
-        # Für echtes historisches Backtesting wird in Phase 2.1.3+ ein Snapshot-Cache/DB ergänzt.
+        if asof:
+            raise ValueError("Historical snapshots require point-in-time fundamentals and are disabled.")
         fundamentals = self.data_layer.get_basic_fundamentals(symbol)
         growth = self.data_layer.get_growth(symbol)
         income = self.data_layer.get_income(symbol)

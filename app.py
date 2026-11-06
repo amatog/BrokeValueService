@@ -58,7 +58,7 @@ def debug_strategy_keys():
         "buffett": buffett_strategy(fundamentals),
         "greenblatt": greenblatt_strategy(fundamentals),
         "munger": munger_strategy(fundamentals),
-        "lynch": lynch_strategy(fundamentals),
+        "lynch": lynch_strategy(fundamentals, data_layer.get_growth(symbol)),
         "schloss": schloss_strategy(fundamentals),
         "davis": davis_strategy(fundamentals),
         "templeton": templeton_strategy(fundamentals),
@@ -76,7 +76,6 @@ def debug_env():
     alpha_keys = [k for k in os.environ.keys() if "ALPHA" in k]
     return jsonify(
         has_key="ALPHAVANTAGE_API_KEY" in os.environ,
-        value=os.environ.get("ALPHAVANTAGE_API_KEY"),
         keys=alpha_keys,
     )
 
@@ -132,7 +131,7 @@ def value_lynch():
         return error_response, status
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
-    l = lynch_strategy(fundamentals)
+    l = lynch_strategy(fundamentals, data_layer.get_growth(symbol))
     return jsonify(symbol=symbol, fundamentals=fundamentals, lynch=l)
 
 
@@ -269,7 +268,11 @@ def value_score():
 
 @app.route("/bundle", methods=["GET"])
 def bundle():
+    if request.args.get("asof"):
+        return jsonify(error="Point-in-time fundamentals are not available; historical snapshots are disabled."), 422
     symbol = request.args.get("symbol", "").upper().strip()
+    if not symbol:
+        return jsonify(error="Missing required query parameter: symbol"), 400
     sector = request.args.get("sector")  # optional
 
     fundamentals = data_layer.get_basic_fundamentals(symbol)
